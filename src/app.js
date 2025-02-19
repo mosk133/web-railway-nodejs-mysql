@@ -10,7 +10,6 @@ app.use(cookieParser());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true })); // middleware datos de formulario y evitar el error
 
-//variable entorno para railway
 const SECRET_KEY = process.env.SECRET_KEY || "default_secret_key";
 
 // ruta registro
@@ -32,7 +31,7 @@ app.post('/register', async (req, res) => {
   const hashedPassword = await bcrypt.hash(password, 10);
 
   try {
-    await pool.query('INSERT INTO users (username, password) VALUES (?, ?)', [username, hashedPassword]);
+    await pool.query('INSERT INTO users (username, password) VALUES ($1, $2)', [username, hashedPassword]);
     res.status(201).send('User registered');
   } catch (error) {
     res.status(500).send('Error registering user');
@@ -55,13 +54,13 @@ app.get('/login', (req, res) => {
 // post login
 app.post('/login', async (req, res) => {
   const { username, password } = req.body;
-  const [rows] = await pool.query('SELECT * FROM users WHERE username = ?', [username]);
+  const result = await pool.query('SELECT * FROM users WHERE username = $1', [username]);
 
-  if (rows.length === 0) {
+  if (result.rows.length === 0) {
     return res.status(400).json({ error: 'Invalid credentials' });
   }
 
-  const user = rows[0];
+  const user = result.rows[0];
   const isPasswordValid = await bcrypt.compare(password, user.password);
 
   if (!isPasswordValid) {
@@ -73,8 +72,8 @@ app.post('/login', async (req, res) => {
   // HTTP-only cookie
   res.cookie('token', token, {
     httpOnly: true,
-    secure: false, // cambiar a true si se usa HTTPS
-    sameSite: 'Lax' //para evitar problemas de CORS
+    secure: process.env.NODE_ENV === 'production', // Usar HTTPS en producción
+    sameSite: 'Lax' // Para evitar problemas de CORS
   });
 
   res.json({ message: 'Logged in successfully' });
@@ -105,13 +104,13 @@ app.get('/protected', authenticateToken, (req, res) => {
 // ruta formulario de edicion de user
 app.get('/edit/:id', authenticateToken, async (req, res) => {
   const userId = req.params.id;
-  const [rows] = await pool.query('SELECT * FROM users WHERE id = ?', [userId]);
+  const result = await pool.query('SELECT * FROM users WHERE id = $1', [userId]);
 
-  if (rows.length === 0) {
+  if (result.rows.length === 0) {
     return res.status(404).send('User not found');
   }
 
-  const user = rows[0];
+  const user = result.rows[0];
   res.send(`
     <form action="/edit/${userId}" method="post">
       <label for="name">Name:</label>
@@ -129,7 +128,7 @@ app.post('/edit/:id', authenticateToken, async (req, res) => {
   const { name, username } = req.body;
 
   try {
-    await pool.query('UPDATE users SET name = ?, username = ? WHERE id = ?', [name, username, userId]);
+    await pool.query('UPDATE users SET name = $1, username = $2 WHERE id = $3', [name, username, userId]);
     res.send('User updated');
   } catch (error) {
     res.status(500).send('Error updating user');
@@ -143,9 +142,9 @@ app.get('/', async (req, res) => {
   const offset = (page - 1) * limit;
 
   try {
-    const [rows] = await pool.query('SELECT * FROM users LIMIT ? OFFSET ?', [limit, offset]);
-    const [totalRows] = await pool.query('SELECT COUNT(*) as count FROM users');
-    const totalUsers = totalRows[0].count;
+    const result = await pool.query('SELECT * FROM users LIMIT $1 OFFSET $2', [limit, offset]);
+    const totalResult = await pool.query('SELECT COUNT(*) as count FROM users');
+    const totalUsers = parseInt(totalResult.rows[0].count);
     const totalPages = Math.ceil(totalUsers / limit);
 
     let html = `
@@ -153,7 +152,7 @@ app.get('/', async (req, res) => {
       <ul>
     `;
 
-    rows.forEach(user => {
+    result.rows.forEach(user => {
       html += `<li>${user.id}: ${user.username} - ${user.name || 'No Name'}</li>`;
     });
 
@@ -185,11 +184,11 @@ app.get('/', async (req, res) => {
 });
 
 app.get('/ping', async (req, res) => {
-  const [result] = await pool.query(`SELECT "hello world" as RESULT`);
-  res.json(result[0]);
+  const result = await pool.query(`SELECT 'hello world' as RESULT`);
+  res.json(result.rows[0]);
 });
 
-//ahora user random
+// ruta para crear un usuario aleatorio
 app.get('/create', async (req, res) => {
   const randomName = Math.random().toString(36).substring(2, 7);
   const randomUsername = `user_${Math.random().toString(36).substring(2, 7)}`;
@@ -197,8 +196,8 @@ app.get('/create', async (req, res) => {
   const hashedPassword = await bcrypt.hash(password, 10);
 
   try {
-    const result = await pool.query('INSERT INTO users (name, username, password) VALUES (?, ?, ?)', [randomName, randomUsername, hashedPassword]);
-    res.json({ message: 'Random user created', userId: result[0].insertId });
+    const result = await pool.query('INSERT INTO users (name, username, password) VALUES ($1, $2, $3) RETURNING id', [randomName, randomUsername, hashedPassword]);
+    res.json({ message: 'Random user created', userId: result.rows[0].id });
   } catch (error) {
     res.status(500).send('Error creating random user');
   }
